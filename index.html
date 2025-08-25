@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>學員出席狀態</title>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --text:#e8ecff; --muted:#9aa4d6; --ok:#16a34a; --absent:#dc2626; --leave:#d97706; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Segoe UI", Roboto; background:var(--bg); color:var(--text); }
+    .wrap { max-width:960px; margin:40px auto; padding:0 16px; }
+    .title { font-size:28px; font-weight:700; letter-spacing:0.5px; }
+    .card { background:var(--card); border-radius:16px; padding:20px; box-shadow: 0 12px 30px rgba(0,0,0,.25); }
+    .toolbar { display:flex; gap:12px; align-items:center; margin:14px 0 18px; flex-wrap:wrap; }
+    .btn { background:#1f2a52; border:1px solid #2a3970; color:var(--text); padding:8px 12px; border-radius:10px; cursor:pointer; }
+    .btn:hover { filter:brightness(1.1); }
+    .muted { color:var(--muted); font-size:14px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:12px 10px; border-bottom:1px solid #223069; }
+    th { text-align:left; color:#c4ccff; font-weight:600; font-size:14px; }
+    tr:hover td { background:rgba(255,255,255,.03); }
+    .badge { font-size:12px; padding:4px 8px; border-radius:999px; font-weight:600; display:inline-block; }
+    .ok { background:rgba(22,163,74,.16); color:var(--ok); border:1px solid rgba(22,163,74,.5); }
+    .absent { background:rgba(220,38,38,.16); color:var(--absent); border:1px solid rgba(220,38,38,.5); }
+    .leave { background:rgba(217,119,6,.16); color:var(--leave); border:1px solid rgba(217,119,6,.5); }
+    .search { flex:1 1 220px; }
+    input[type="search"]{ width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2a3970; background:#0e1630; color:var(--text);}
+    select{ padding:10px 12px; border-radius:10px; border:1px solid #2a3970; background:#0e1630; color:var(--text);}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">學員出席狀態</div>
+    <div class="card">
+      <div class="toolbar">
+        <input id="q" class="search" type="search" placeholder="搜尋姓名…" />
+        <select id="filter">
+          <option value="">全部狀態</option>
+          <option value="出席">出席</option>
+          <option value="缺席">缺席</option>
+          <option value="請假">請假</option>
+        </select>
+        <button id="refresh" class="btn">立即更新</button>
+        <span id="updated" class="muted">最後更新：—</span>
+      </div>
+      <table id="table">
+        <thead>
+          <tr><th style="width:40%">姓名</th><th>出席狀態</th></tr>
+        </thead>
+        <tbody id="tbody"><tr><td colspan="2" class="muted">載入中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // ① 把這個換成你「發佈到網路上」的 CSV 連結
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTQGytA6fvvxqjX9nnXxoa1X7ZUxUMHOm7yKyJV8yU5LsJ0INRZweXz8LOADqEJv1z2OVnfWnRpgYSz/pub?gid=0&single=true&output=csv";
+
+    const $ = sel => document.querySelector(sel);
+    const tbody = $('#tbody'), q = $('#q'), filter = $('#filter'), updated = $('#updated');
+
+    // 簡單 CSV 解析器（足夠應付一般姓名/狀態；若你的資料含逗號/引號，也可改用 PapaParse）
+    function parseCSV(text) {
+      const rows = [];
+      let row = [], cur = '', inQuotes = false;
+      for (let i=0; i<text.length; i++) {
+        const c = text[i], n = text[i+1];
+        if (c === '"' && n === '"') { cur += '"'; i++; continue; }
+        if (c === '"') { inQuotes = !inQuotes; continue; }
+        if (c === ',' && !inQuotes) { row.push(cur); cur=''; continue; }
+        if ((c === '\n' || c === '\r') && !inQuotes) {
+          if (cur !== '' || row.length) { row.push(cur); rows.push(row); row=[]; cur=''; }
+          continue;
+        }
+        cur += c;
+      }
+      if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+      return rows;
+    }
+
+    function badge(status) {
+      const s = String(status || '').trim();
+      const map = { '出席':'ok', '缺席':'absent', '請假':'leave' };
+      const cls = map[s] || 'leave';
+      return `<span class="badge ${cls}">${s || '—'}</span>`;
+    }
+
+    let data = []; // {name, status}
+
+    function render() {
+      const keyword = q.value.trim();
+      const f = filter.value;
+      const list = data.filter(r => {
+        const matchName = !keyword || r.name.toLowerCase().includes(keyword.toLowerCase());
+        const matchStatus = !f || r.status === f;
+        return matchName && matchStatus;
+      });
+      if (!list.length) {
+        tbody.innerHTML = `<tr><td colspan="2" class="muted">沒有資料（或篩選條件下沒有符合項目）</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = list.map(r =>
+        `<tr><td>${r.name || '—'}</td><td>${badge(r.status)}</td></tr>`
+      ).join('');
+    }
+
+    async function load() {
+      const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + 't=' + Date.now(); // 防快取
+      const res = await fetch(url, { cache:'no-store' });
+      if (!res.ok) throw new Error('下載失敗：' + res.status);
+      const text = await res.text();
+      const rows = parseCSV(text).filter(r => r.length);
+      if (!rows.length) throw new Error('CSV 空白');
+
+      // 找欄位位置（容錯：不一定固定第 1、2 欄）
+      const header = rows[0];
+      const nameIdx = header.indexOf('姓名');
+      const statusIdx = header.indexOf('出席狀態');
+      if (nameIdx === -1 || statusIdx === -1) throw new Error('找不到「姓名／出席狀態」欄位');
+
+      data = rows.slice(1).map(r => ({
+        name: (r[nameIdx] || '').trim(),
+        status: (r[statusIdx] || '').trim(),
+      })).filter(r => r.name);
+
+      updated.textContent = '最後更新：' + new Date().toLocaleString();
+      render();
+    }
+
+    // 事件
+    $('#refresh').addEventListener('click', load);
+    q.addEventListener('input', render);
+    filter.addEventListener('change', render);
+
+    // 進站即載入 + 每 30 秒自動更新一次
+    load().catch(err => { tbody.innerHTML = `<tr><td colspan="2" class="muted">${err.message}</td></tr>`; });
+    setInterval(() => load().catch(()=>{}), 30000);
+  </script>
+</body>
+</html>
